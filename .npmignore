@@ -1,0 +1,12 @@
+node_modules
+build
+.vscode
+.github
+test
+scripts/*.log
+*.tgz
+vcpkg/scripts
+vcpkg/version
+vcpkg/ports
+vcpkg/.github
+vcpkg/docs
