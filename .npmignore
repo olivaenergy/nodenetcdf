@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# CI/CD
+.github/
+
+# vcpkg - exclude everything
+vcpkg/
+
+# Logs
+*.log
+scripts/*.log
+
+# Tarballs
+*.tgz
+
+# OS files
+.DS_Store

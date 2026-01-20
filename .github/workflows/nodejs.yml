@@ -1,20 +1,26 @@
-name: Node.js CI
+name: CI – Build, Test, and Publish
 
 on:
-  push:
-    branches: [ master, main ]
   pull_request:
     branches: [ master, main ]
+
+  release:
+    types: [ created ]
+
   workflow_dispatch:
     inputs:
+      publish:
+        description: 'Manually publish to npm'
+        required: false
+        type: boolean
+        default: false
       node-version:
         description: 'Node.js version to test (optional, defaults to matrix)'
         required: false
         type: choice
         options:
-          - 'all'
           - '22.x'
-        default: 'all'
+        default: '22.x'
       os:
         description: 'Operating system to test (optional, defaults to matrix)'
         required: false
@@ -30,68 +36,119 @@ jobs:
   build-and-test:
     name: Build and Test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20   # ⬅️ Added timeout here
+    timeout-minutes: 20
+
+    # Run for PRs and manual runs, but not releases
+    if: github.event_name != 'release'
 
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.os != 'all' && fromJSON(format('["{0}"]', github.event.inputs.os)) || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
-        node-version: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.node-version != 'all' && fromJSON(format('["{0}"]', github.event.inputs.node-version)) || fromJSON('["22.x"]') }}
-    
+        os: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.os != 'all'
+          && fromJSON(format('["{0}"]', github.event.inputs.os))
+          || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
+        node-version: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.node-version != 'all'
+          && fromJSON(format('["{0}"]', github.event.inputs.node-version))
+          || fromJSON('["22.x"]') }}
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: false
-    
-    - name: Setup Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ matrix.node-version }}
-    
-    - name: Install build tools (Ubuntu)
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential cmake git curl zip unzip tar pkg-config linux-libc-dev
-    
-    - name: Install build tools (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        # Xcode command line tools are usually pre-installed
-        # Install additional tools if needed
-        brew install cmake pkg-config
-    
-    - name: Install build tools (Windows)
-      if: runner.os == 'Windows'
-      uses: microsoft/setup-msbuild@v2
-    
-    - name: Setup vcpkg cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          vcpkg
-          vcpkg_installed
-        key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/package.json') }}
-        restore-keys: |
-          ${{ runner.os }}-vcpkg-
-    
-    - name: Install dependencies and build
-      run: npm install
-      env:
-        CI: true
-    
-    - name: Run tests
-      run: npm test
-      env:
-        CI: true
-    
-    - name: Upload build artifacts on failure
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-logs-${{ matrix.os }}-node-${{ matrix.node-version }}
-        path: |
-          build/
-          *.log
-        retention-days: 7
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install build tools (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config linux-libc-dev
+
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake pkg-config
+
+      - name: Install build tools (Windows)
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup vcpkg cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg
+            vcpkg_installed
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/package.json') }}
+
+      - name: Install dependencies and build
+        run: npm ci
+        env:
+          CI: true
+
+      - name: Run tests
+        run: npm test
+        env:
+          CI: true
+
+      - name: Upload build artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.os }}-node-${{ matrix.node-version }}
+          path: |
+            build/
+            *.log
+          retention-days: 3
+
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+
+    if: |
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.event.inputs.publish == 'true')
+
+    # OIDC permissions for Trusted Publishing
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js with npm registry and provenance
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify npm configuration
+        run: |
+          npm config get registry
+          npm config list
+          ls -la .
+          ls -la $HOME
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build --if-present
+
+      - name: Publish to npm with provenance
+        run: |
+          npm install -g npm@11.7.0
+          npm -v
+          npm publish --provenance --access public
+
+      - name: Upload npm logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-publish-logs
+          path: ~/.npm/_logs/*-debug-*.log
+          retention-days: 3
